@@ -7,7 +7,7 @@ import (
 
 type TransferRequest struct {
 	ToAccount int `json:"toAccount"`
-	amount    int `json:"amount"`
+	Amount    int `json:"amount"`
 }
 type CreateAccountRequest struct {
 	FirstName string `json:firstName`

@@ -28,6 +28,7 @@ func NewPostgresStore() (*PostgresStore, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+	fmt.Println("Database connected successfully")
 	return &PostgresStore{
 		db: db,
 	}, nil

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"time"
 
-	"github.com/gorilla/mux"
+	jwt "github.com/golang-jwt/jwt/v5"
 )
 
 type APIServer struct {
@@ -24,14 +26,15 @@ func NewAPIServer(listenAddr string, store Storage) *APIServer {
 }
 
 func (s *APIServer) Run() {
-	router := mux.NewRouter()
+	router := http.NewServeMux()
 	// Route Handlers
-	router.HandleFunc("/accounts", makeHTTPhandleFunc(s.handleAccount))
-	router.HandleFunc("/accounts/{id}", makeHTTPhandleFunc(s.handleGetAccountByID))
-	router.HandleFunc("/transfer", makeHTTPhandleFunc(s.handleTransferMoney))
+	router.HandleFunc("GET /accounts", makeHTTPhandleFunc(s.handleGetAccount))
+	router.HandleFunc("POST /accounts", makeHTTPhandleFunc(s.handleCreateAccount))
+	router.HandleFunc("GET /accounts/{id}", withJWTAuth(makeHTTPhandleFunc(s.handleGetAccountByID)))
+	router.HandleFunc("DELETE /accounts/{id}", makeHTTPhandleFunc(s.handleGetAccountByID))
+	router.HandleFunc("POST /transfer", makeHTTPhandleFunc(s.handleTransferMoney))
 
-	log.Println("API Server running on port:", s.listenAddr)
-
+	log.Println("API Server running on port", s.listenAddr)
 	// Listen and run Server
 	err := http.ListenAndServe(s.listenAddr, router)
 	if err != nil {
@@ -39,15 +42,15 @@ func (s *APIServer) Run() {
 	}
 }
 
-func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error {
-	if r.Method == "GET" {
-		return s.handleGetAccount(w, r)
-	}
-	if r.Method == "POST" {
-		return s.handleCreateAccount(w, r)
-	}
-	return fmt.Errorf("method not allowed %s", r.Method)
-}
+// func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error {
+// 	if r.Method == "GET" {
+// 		return s.handleGetAccount(w, r)
+// 	}
+// 	if r.Method == "POST" {
+// 		return s.handleCreateAccount(w, r)
+// 	}
+// 	return fmt.Errorf("method not allowed %s", r.Method)
+// }
 
 func (s *APIServer) handleGetAccount(w http.ResponseWriter, r *http.Request) error {
 	accounts, err := s.store.GetAccounts()
@@ -83,6 +86,7 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	// return nil
 
 	createAccountReq := new(CreateAccountRequest)
+	fmt.Println(createAccountReq)
 
 	if err := json.NewDecoder(r.Body).Decode(createAccountReq); err != nil {
 		return err
@@ -92,6 +96,11 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
+	tokenString, err := createJWT(account)
+	if err != nil {
+		return err
+	}
+	fmt.Println("JWT token:", tokenString)
 	return writeJSON(w, http.StatusOK, account)
 }
 
@@ -123,23 +132,65 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+func createJWT(account *Account) (string, error) {
+	// Create the Claims
+	claims := &jwt.MapClaims{
+		"expiresAt":     jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+		"accountNumber": account.Number,
+	}
+	secret := os.Getenv("JWT_SECRET")
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	ss, err := token.SignedString([]byte(secret))
+
+	return ss, err
+}
+
+// More like a middleware
+func withJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Calling JWT Auth middleware")
+		tokenString := r.Header.Get("x-jwt-token")
+		_, err := validateJWT(tokenString)
+		if err != nil {
+			writeJSON(w, http.StatusForbidden, APiError{Error: "invalid token"})
+			return
+		}
+		handlerFunc(w, r)
+	}
+}
+
+func validateJWT(tokenString string) (*jwt.Token, error) {
+	secret := os.Getenv("JWT_SECRET")
+	fmt.Println(secret)
+	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Don't forget to validate the alg is what you expect:
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		// hmacSampleSecret is a []byte containing your secret, e.g. []byte("my_secret_key")
+		return []byte(secret), nil
+	})
+}
+
 // ?Important Functions
 type apiFunc func(http.ResponseWriter, *http.Request) error
 type APiError struct {
 	Error string `json:"error"`
 }
 
-func makeHTTPhandleFunc(f apiFunc) http.HandlerFunc {
+func makeHTTPhandleFunc(function apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := f(w, r); err != nil {
+		if err := function(w, r); err != nil {
 			// Handle the Error
 			writeJSON(w, http.StatusBadRequest, APiError{Error: err.Error()})
 		}
 	}
 }
 
-func getIdFromRequest(r *http.Request) (int, error) {
-	idStr := mux.Vars(r)["id"]
+func getIdFromRequest(req *http.Request) (int, error) {
+	// idStr := mux.Vars(r)["id"]
+	idStr := req.PathValue("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		return id, fmt.Errorf("invalid id given %s", idStr)
