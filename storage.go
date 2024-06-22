@@ -13,6 +13,7 @@ type Storage interface {
 	UpdateAccount(*Account) error
 	GetAccounts() ([]*Account, error)
 	GetAccountByID(int) (*Account, error)
+	GetAccountByNumber(int) (*Account, error)
 }
 
 type PostgresStore struct {
@@ -44,6 +45,7 @@ func (s *PostgresStore) createAccountTable() error {
 		firstName VARCHAR(50),
 		lastName VARCHAR(50),
 		number SERIAL,
+		encrypted_password VARCHAR(100),
 		balance FLOAT,
 		createdAt TIMESTAMP
 	)`
@@ -56,16 +58,16 @@ func (s *PostgresStore) CreateAccount(acc *Account) error {
 	query := `
 	INSERT
 	INTO 
-	account (firstName, lastName, number , balance, createdAt) 
+	account (firstName, lastName,  number ,encrypted_password, balance, createdAt) 
 	VALUES (
-		$1, $2, $3, $4, $5
+		$1, $2, $3, $4, $5, $6
 	)`
 
-	resp, err := s.db.Query(query, acc.FirstName, acc.LastName, acc.Number, acc.Balance, acc.CreatedAt)
+	_, err := s.db.Query(query, acc.FirstName, acc.LastName, acc.Number, acc.EncryptedPassword, acc.Balance, acc.CreatedAt)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%v+", resp)
+
 	return nil
 }
 
@@ -77,6 +79,7 @@ func (s *PostgresStore) DeleteAccount(id int) error {
 	_, err := s.db.Query(`DELETE FROM account WHERE id = $1`, int(id))
 	return err
 }
+
 func (s *PostgresStore) GetAccountByID(id int) (*Account, error) {
 	rows, err := s.db.Query(`SELECT * FROM account WHERE id =$1
 	`, int(id))
@@ -87,6 +90,18 @@ func (s *PostgresStore) GetAccountByID(id int) (*Account, error) {
 		return scanIntoAccounts(rows)
 	}
 	return nil, fmt.Errorf("Account %d not found!!", id)
+}
+
+func (s *PostgresStore) GetAccountByNumber(number int) (*Account, error) {
+	rows, err := s.db.Query(`SELECT * FROM account WHERE number =$1
+	`, number)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		return scanIntoAccounts(rows)
+	}
+	return nil, fmt.Errorf("Account with  number [%d] not found!!", number)
 }
 
 func (s *PostgresStore) GetAccounts() ([]*Account, error) {
@@ -120,6 +135,7 @@ func scanIntoAccounts(rows *sql.Rows) (*Account, error) {
 		&account.FirstName,
 		&account.LastName,
 		&account.Number,
+		&account.EncryptedPassword,
 		&account.Balance,
 		&account.CreatedAt,
 	)
